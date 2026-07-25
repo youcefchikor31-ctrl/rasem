@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AirDraw — الرسم بالإيماءات</title>
+<style>
+  :root{
+    --ink-green:#39ff8a;
+    --ink-green-dim:#1f8f52;
+    --bg:#050607;
+    --panel:#0d1210cc;
+    --panel-border:#39ff8a33;
+    --text:#eafff2;
+    --muted:#7fa896;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:var(--bg);overflow:hidden;font-family:var(--sans);color:var(--text);}
+
+  #stage{position:fixed;inset:0;background:#000;touch-action:none;}
+  #ink, #live, #ref{position:absolute; inset:0; width:100%; height:100%;}
+  #live{pointer-events:none;}
+  #ref{opacity:.55; transition:opacity .2s ease;}
+  #ref.placing{opacity:.92;}
+
+  #divider{position:absolute; top:0; bottom:0; left:50%; width:1px; background:linear-gradient(var(--ink-green-dim), var(--ink-green), var(--ink-green-dim)); box-shadow:0 0 10px var(--ink-green); display:none; z-index:5;}
+  #sideTag{position:absolute; top:14px; z-index:6; display:none; font-family:var(--mono); font-size:11px; letter-spacing:.15em; color:var(--muted); padding:4px 10px; border:1px solid var(--panel-border); border-radius:20px; background:var(--panel); backdrop-filter:blur(6px);}
+
+  /* camera bubble */
+  #camWrap{
+    position:absolute; top:14px; left:14px; z-index:20;
+    width:46px; height:46px; border-radius:50%;
+    overflow:hidden; border:1.5px solid var(--ink-green);
+    box-shadow:0 0 12px #39ff8a55, inset 0 0 10px #000;
+    transition: width .32s cubic-bezier(.4,0,.2,1), height .32s cubic-bezier(.4,0,.2,1), border-radius .32s ease, top .32s ease, left .32s ease;
+    cursor:pointer;
+    background:#000;
+    opacity:.85;
+  }
+  #camWrap.expanded{
+    width:min(55vw,240px); height:min(55vw,240px); border-radius:20px;
+    top:14px; left:14px; opacity:1;
+  }
+  #camWrap video{
+    width:100%; height:100%; object-fit:cover;
+    transform:scaleX(-1);
+  }
+  #camWrap.envFacing video{ transform:scaleX(1); }
+  #camHint{position:absolute; bottom:2px; left:0; right:0; text-align:center; font-family:var(--mono); font-size:8px; color:var(--ink-green); opacity:.8; z-index:2;}
+
+  /* remote friend's camera bubble (their side) */
+  #remoteCamWrap{
+    position:absolute; top:14px; right:14px; z-index:20;
+    width:46px; height:46px; border-radius:50%;
+    overflow:hidden; border:1.5px solid var(--ink-green-dim);
+    box-shadow:0 0 12px #39ff8a44, inset 0 0 10px #000;
+    background:#000; display:none; opacity:.9;
+  }
+  #remoteCamWrap.show{display:block;}
+  #remoteCamWrap video{width:100%; height:100%; object-fit:cover;}
+  #remoteCamLabel{position:absolute; bottom:1px; left:0; right:0; text-align:center; font-family:var(--mono); font-size:7px; color:var(--ink-green); opacity:.85; z-index:2;}
+
+  #status{
+    position:absolute; top:22px; right:16px; z-index:20;
+    font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+    color:var(--muted); text-align:right; line-height:1.6;
+    max-width:46vw;
+  }
+  #status b{color:var(--ink-green);}
+
+  /* toolbar */
+  #toolbar{
+    position:absolute; bottom:22px; left:50%; transform:translateX(-50%);
+    display:flex; gap:12px; align-items:center; z-index:30;
+    background:var(--panel); border:1px solid var(--panel-border);
+    padding:10px 14px; border-radius:30px; backdrop-filter:blur(10px);
+    max-width:90vw; overflow-x:auto; scrollbar-width:none;
+    transition:opacity .25s ease, transform .25s ease; opacity:1;
+  }
+  #toolbar::-webkit-scrollbar{display:none;}
+  #toolbar.hidden{opacity:0; transform:translateX(-50%) translateY(30px); pointer-events:none;}
+  .tbtn{
+    width:52px; height:52px; border-radius:50%; border:1px solid var(--panel-border);
+    background:#0b0f0d; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; position:relative; transition:transform .1s ease, box-shadow .15s ease;
+    touch-action:manipulation; flex-shrink:0;
+  }
+  .tbtn:active{transform:scale(.88); box-shadow:0 0 14px var(--ink-green);}
+  .tbtn svg{width:24px;height:24px;stroke:var(--ink-green);fill:none;stroke-width:1.6;pointer-events:none;}
+  #colorDot{width:24px;height:24px;border-radius:50%;background:var(--ink-green);box-shadow:0 0 8px currentColor;pointer-events:none;}
+
+  #toggleBtn{
+    position:absolute; bottom:22px; right:16px; z-index:35;
+    width:50px; height:50px; border-radius:50%; border:1px solid var(--panel-border);
+    background:var(--panel); backdrop-filter:blur(10px);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    touch-action:manipulation; transition:transform .1s ease;
+  }
+  #toggleBtn:active{transform:scale(.88);}
+  #toggleBtn svg{width:22px;height:22px;stroke:var(--ink-green);fill:none;stroke-width:1.6;pointer-events:none;}
+
+  /* color ring popup */
+  #colorRing{
+    position:absolute; bottom:88px; left:50%; transform:translateX(-50%) scale(.9);
+    display:none; width:300px; height:300px; z-index:31;
+    opacity:0; transition:opacity .18s ease, transform .18s ease;
+    touch-action:manipulation;
+  }
+  #colorRing.show{display:block; opacity:1; transform:translateX(-50%) scale(1);}
+  .swatch{
+    position:absolute; width:30px; height:30px; border-radius:50%;
+    border:2px solid #00000055; cursor:pointer; box-shadow:0 2px 8px #0007;
+    transition:transform .1s ease;
+  }
+  .swatch:active{transform:scale(1.3);}
+  #customColorWrap{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:64px; height:64px; border-radius:50%; overflow:hidden;
+    border:2px solid var(--ink-green); box-shadow:0 0 10px var(--ink-green);
+    display:flex; align-items:center; justify-content:center;
+    background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);
+  }
+  #customColorInput{
+    position:absolute; inset:-4px; width:calc(100% + 8px); height:calc(100% + 8px);
+    border:none; padding:0; cursor:pointer; opacity:0;
+  }
+  #customColorLabel{position:absolute; pointer-events:none; font-size:9px; font-family:var(--mono); color:#000; background:#fff9; padding:1px 4px; border-radius:6px; bottom:-2px; left:50%; transform:translateX(-50%);}
+
+  /* size popup */
+  #sizePanel{
+    position:absolute; bottom:90px; left:50%; transform:translateX(-50%);
+    display:none; z-index:31; background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:20px; padding:16px 20px; align-items:center; gap:12px; width:220px;
+  }
+  #sizePanel.show{display:flex;}
+  #sizeSlider{flex:1; accent-color:var(--ink-green);}
+  #sizePreviewDot{border-radius:50%; background:var(--ink-green); flex-shrink:0;}
+
+  /* collab modal */
+  #collabModal{
+    position:fixed; inset:0; z-index:50; display:none;
+    align-items:center; justify-content:center;
+    background:#000000cc; backdrop-filter:blur(4px);
+  }
+  #collabModal.show{display:flex;}
+  .card{
+    position:relative;
+    width:min(88vw,340px); background:#0b0f0d; border:1px solid var(--panel-border);
+    border-radius:18px; padding:22px; text-align:center;
+  }
+  .card h2{font-size:16px; margin:0 0 4px; color:var(--ink-green); font-family:var(--mono); letter-spacing:.1em;}
+  .card p{font-size:12px; color:var(--muted); margin:0 0 16px; line-height:1.6;}
+  .codeBox{
+    font-family:var(--mono); font-size:28px; letter-spacing:.3em; color:var(--ink-green);
+    background:#000; border:1px dashed var(--ink-green-dim); border-radius:10px;
+    padding:14px; margin-bottom:14px;
+  }
+  .card input{
+    width:100%; padding:12px; border-radius:10px; border:1px solid var(--panel-border);
+    background:#000; color:var(--text); font-family:var(--mono); font-size:18px; text-align:center;
+    letter-spacing:.25em; margin-bottom:12px;
+  }
+  .card button{
+    width:100%; padding:12px; border-radius:10px; border:none; margin-bottom:8px;
+    font-family:var(--sans); font-weight:600; font-size:14px; cursor:pointer;
+  }
+  .primaryBtn{background:var(--ink-green); color:#02150a;}
+  .ghostBtn{background:transparent; color:var(--muted); border:1px solid var(--panel-border) !important;}
+  #closeModal{position:absolute; top:14px; left:14px; color:var(--muted); font-size:22px; cursor:pointer;}
+
+  #toast{
+    position:absolute; top:80px; left:50%; transform:translateX(-50%);
+    background:var(--panel); border:1px solid var(--panel-border); color:var(--ink-green);
+    font-family:var(--mono); font-size:11px; padding:8px 16px; border-radius:20px;
+    opacity:0; pointer-events:none; transition:opacity .3s ease; z-index:60;
+    max-width:86vw; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #toast.show{opacity:1;}
+
+  #camError{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    z-index:70; display:none; width:min(86vw,340px);
+    background:#150808ee; border:1px solid #ff6b6b55; border-radius:16px;
+    padding:20px; text-align:center; backdrop-filter:blur(8px);
+  }
+  #camError.show{display:block;}
+  #camErrorMsg{font-size:13px; line-height:1.7; color:#ffd8d8; margin-bottom:14px;}
+  #retryCamBtn{
+    width:100%; padding:11px; border-radius:10px; border:none; cursor:pointer;
+    background:var(--ink-green); color:#02150a; font-weight:600; font-size:14px;
+  }
+
+  /* image placement controls */
+  #placeBar{
+    position:absolute; bottom:92px; left:50%; transform:translateX(-50%);
+    display:none; gap:16px; z-index:40;
+  }
+  #placeBar.show{display:flex;}
+  .placeBtn{
+    width:58px; height:58px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:22px; border:none; touch-action:manipulation;
+    box-shadow:0 4px 14px #0009;
+  }
+  #confirmPlaceBtn{background:var(--ink-green); color:#02150a;}
+  #cancelPlaceBtn{background:#2a2a2a; color:#ff6b6b; border:1px solid #ff6b6b55 !important;}
+  #placeHint{
+    position:absolute; top:80px; left:50%; transform:translateX(-50%);
+    z-index:40; display:none; font-family:var(--mono); font-size:11px; color:var(--muted);
+    background:var(--panel); border:1px solid var(--panel-border); padding:7px 14px; border-radius:20px;
+    text-align:center; white-space:nowrap;
+  }
+  #placeHint.show{display:block;}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="ref"></canvas>
+  <canvas id="ink"></canvas>
+  <canvas id="live"></canvas>
+  <div id="divider"></div>
+  <div id="sideTag"></div>
+</div>
+
+<div id="camWrap">
+  <video id="cam" autoplay playsinline muted></video>
+  <div id="camHint">اضغط للتكبير</div>
+</div>
+
+<div id="remoteCamWrap">
+  <video id="remoteCam" autoplay playsinline></video>
+  <div id="remoteCamLabel">صديقك</div>
+</div>
+
+<div id="status">
+  <div><b id="handState">—</b></div>
+  <div id="roomState">رسم فردي — لا يوجد اتصال</div>
+</div>
+
+<div id="camError">
+  <div id="camErrorMsg"></div>
+  <button id="retryCamBtn">إعادة المحاولة</button>
+</div>
+
+<div id="toast"></div>
+
+<div id="toolbar">
+  <div class="tbtn" id="colorBtn" title="الألوان"><div id="colorDot"></div></div>
+  <div class="tbtn" id="sizeBtn" title="سماكة القلم">
+    <svg viewBox="0 0 24 24"><path d="M3 17l7-7 4 4-7 7H3v-4z"/><path d="M13 7l4-4 4 4-4 4z"/></svg>
+  </div>
+  <div class="tbtn" id="collabBtn" title="ادعُ صديقاً">
+    <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M4 20c0-3 2-5 5-5s5 2 5 5"/><path d="M16 5l3 3-3 3"/></svg>
+  </div>
+  <div class="tbtn" id="clearBtn" title="مسح">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+  </div>
+  <div class="tbtn" id="flipBtn" title="قلب الكاميرا">
+    <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 12v-2a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 12v2a4 4 0 0 1-4 4H3"/></svg>
+  </div>
+  <div class="tbtn" id="addImgBtn" title="إضافة صورة">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 21"/><path d="M12 3v6M9 6h6" stroke-width="1.6"/></svg>
+  </div>
+  <div class="tbtn" id="deleteImgBtn" title="حذف الصورة المرجعية">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 21"/><path d="M4 4l16 16" stroke="#ff6b6b"/></svg>
+  </div>
+</div>
+
+<input type="file" id="imgFileInput" accept="image/*" style="display:none">
+
+<div id="placeHint">اسحب لتحريك الصورة، وبإصبعين كبّر أو صغّر</div>
+<div id="placeBar">
+  <button class="placeBtn" id="cancelPlaceBtn" title="إلغاء">✕</button>
+  <button class="placeBtn" id="confirmPlaceBtn" title="تأكيد">✓</button>
+</div>
+
+<div id="toggleBtn" title="إخفاء/إظهار الأزرار">
+  <svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+</div>
+
+<div id="colorRing">
+  <div id="customColorWrap">
+    <input type="color" id="customColorInput" value="#39ff8a">
+    <div id="customColorLabel">مخصص</div>
+  </div>
+</div>
+
+<div id="sizePanel">
+  <div id="sizePreviewDot"></div>
+  <input type="range" id="sizeSlider" min="2" max="42" value="6">
+</div>
+
+<div id="collabModal">
+  <div class="card">
+    <div id="closeModal">✕</div>
+    <h2>ارسم مع صديق</h2>
+    <p>أنشئ غرفة وشارك الرمز مع صديقك على أي جهاز آخر (عبر الإنترنت)، أو أدخل رمزاً وصلك منه. تنقسم الشاشة بخط رفيع، كل شخص يرسم في جهته وترون رسمة بعضكم لحظياً. يحتاج كلا الجهازين اتصالاً بالإنترنت.</p>
+    <div id="createStep">
+      <button class="primaryBtn" id="createRoomBtn">إنشاء غرفة جديدة</button>
+    </div>
+    <div id="createdBox" style="display:none;">
+      <div class="codeBox" id="roomCodeDisplay">------</div>
+      <button class="ghostBtn" id="copyCodeBtn">نسخ الرمز</button>
+    </div>
+    <p style="margin-top:14px;">— أو —</p>
+    <input type="text" id="joinInput" placeholder="أدخل الرمز" maxlength="6">
+    <button class="primaryBtn" id="joinRoomBtn">انضمام</button>
+    <p style="margin-top:10px;">— أو —</p>
+    <button class="ghostBtn" id="soloBtn">الرسم وحدي</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1/dist/peerjs.min.js" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+
+/* ============================================================
+   STATE
+============================================================ */
+let refState = null;      // {canvas, xFrac, yFrac, scaleFrac}
+let placingMode = false;
+
+let currentColor = '#39ff8a';
+let currentSize = 6;
+
+let drawing = false;
+let lastPoint = null;
+let currentStrokePoints = [];
+let strokeCount = 0;
+let strokes = [];          // {id, points:[{x,y}], color, size, side}
+
+let grabbing = false;
+let grabTarget = null;
+let grabAnchor = null;
+let grabOriginalPoints = null;
+
+let mySide = null;         // 'left' | 'right' | null (solo)
+let roomCode = null;
+
+let facingMode = 'user';
+let currentStream = null;
+let handsInstance = null;
+
+let activePointers = new Map();
+let dragStart = null;
+let pinchStartDist = null;
+let pinchStartScale = null;
+
+/* ============================================================
+   CANVAS SETUP
+============================================================ */
+const inkCanvas = document.getElementById('ink');
+const liveCanvas = document.getElementById('live');
+const refCanvas = document.getElementById('ref');
+const inkCtx = inkCanvas.getContext('2d');
+const liveCtx = liveCanvas.getContext('2d');
+const refCtx = refCanvas.getContext('2d');
+const W = ()=>inkCanvas.width, H = ()=>inkCanvas.height;
+
+function resize(){
+  [inkCanvas, liveCanvas, refCanvas].forEach(c=>{
+    c.width = window.innerWidth * devicePixelRatio;
+    c.height = window.innerHeight * devicePixelRatio;
+  });
+  inkCtx.lineCap='round'; inkCtx.lineJoin='round';
+  redrawAll();
+  renderRefOverlay();
+}
+window.addEventListener('resize', resize);
+
+/* ============================================================
+   TOAST
+============================================================ */
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(()=>t.classList.remove('show'), 2400);
+}
+
+/* ============================================================
+   REFERENCE IMAGE OVERLAY (background layer, separate from ink)
+============================================================ */
+function renderRefOverlay(){
+  refCtx.clearRect(0,0,refCanvas.width, refCanvas.height);
+  if(!refState) return;
+  const {canvas, xFrac, yFrac, scaleFrac} = refState;
+  const rw = W() * scaleFrac;
+  const rh = rw * (canvas.height/canvas.width);
+  const cx = xFrac*W(), cy = yFrac*H();
+  refCtx.drawImage(canvas, cx-rw/2, cy-rh/2, rw, rh);
+}
+
+function clamp01(v){ return Math.min(1, Math.max(0, v)); }
+
+/* --- automatic background cutout (chroma-key on corner color) --- */
+function autoCutout(img){
+  const maxDim = 900;
+  let iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const scale = Math.min(1, maxDim / Math.max(iw, ih));
+  const cw = Math.max(1, Math.round(iw*scale)), ch = Math.max(1, Math.round(ih*scale));
+  const off = document.createElement('canvas');
+  off.width = cw; off.height = ch;
+  const octx = off.getContext('2d');
+  octx.drawImage(img, 0, 0, cw, ch);
+
+  let data;
+  try{
+    data = octx.getImageData(0,0,cw,ch);
+  } catch(e){
+    // canvas got tainted (cross-origin) - just return the plain image, no cutout
+    toast('تعذّرت إزالة الخلفية تلقائياً لهذه الصورة، ستُستخدم كما هي');
+    return off;
+  }
+  const px = data.data;
+
+  // sample the four corners to estimate background color
+  const corners = [
+    [2,2], [cw-3,2], [2,ch-3], [cw-3,ch-3]
+  ];
+  let r=0,g=0,b=0;
+  corners.forEach(([x,y])=>{
+    const i = (y*cw+x)*4;
+    r+=px[i]; g+=px[i+1]; b+=px[i+2];
+  });
+  r/=4; g/=4; b/=4;
+
+  const threshold = 42;   // hard cutoff
+  const feather = 34;     // soft edge band
+
+  for(let i=0;i<px.length;i+=4){
+    const dr = px[i]-r, dg = px[i+1]-g, db = px[i+2]-b;
+    const dist = Math.sqrt(dr*dr+dg*dg+db*db);
+    if(dist < threshold){
+      px[i+3] = 0;
+    } else if(dist < threshold+feather){
+      const t = (dist-threshold)/feather;
+      px[i+3] = Math.round(px[i+3]*t);
+    }
+  }
+  octx.putImageData(data,0,0);
+  return off;
+}
+
+function enterPlacingMode(canvas){
+  refState = { canvas, xFrac:0.5, yFrac:0.42, scaleFrac:0.55 };
+  placingMode = true;
+  refCanvas.classList.add('placing');
+  document.getElementById('placeBar').classList.add('show');
+  document.getElementById('placeHint').classList.add('show');
+  document.getElementById('toolbar').classList.add('hidden');
+  renderRefOverlay();
+  toast('اسحب الصورة لتحديد مكانها ثم اضغط ✓');
+}
+
+function exitPlacingMode(keep){
+  placingMode = false;
+  refCanvas.classList.remove('placing');
+  document.getElementById('placeBar').classList.remove('show');
+  document.getElementById('placeHint').classList.remove('show');
+  document.getElementById('toolbar').classList.remove('hidden');
+  if(!keep){ refState = null; }
+  renderRefOverlay();
+}
+
+document.getElementById('addImgBtn').addEventListener('click', ()=>{
+  document.getElementById('imgFileInput').click();
+});
+document.getElementById('imgFileInput').addEventListener('change', (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = ()=>{
+    const cut = autoCutout(img);
+    enterPlacingMode(cut);
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = ()=>{ toast('تعذّر فتح هذه الصورة'); };
+  img.src = url;
+  e.target.value = '';
+});
+document.getElementById('confirmPlaceBtn').addEventListener('click', ()=>{
+  exitPlacingMode(true);
+  toast('ارسم الآن فوق الصورة ✍️');
+});
+document.getElementById('cancelPlaceBtn').addEventListener('click', ()=>{
+  exitPlacingMode(false);
+});
+document.getElementById('deleteImgBtn').addEventListener('click', ()=>{
+  if(!refState && !placingMode){ toast('لا توجد صورة مرجعية'); return; }
+  exitPlacingMode(false);
+  toast('تم حذف الصورة، رسمتك بقيت كما هي');
+});
+
+/* --- touch/mouse placement: drag to move, two fingers to scale --- */
+const stageEl = document.getElementById('stage');
+stageEl.addEventListener('pointerdown', (e)=>{
+  if(!placingMode || !refState) return;
+  stageEl.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(activePointers.size===1){
+    dragStart = {x:e.clientX, y:e.clientY, xFrac:refState.xFrac, yFrac:refState.yFrac};
+  } else if(activePointers.size===2){
+    const pts = [...activePointers.values()];
+    pinchStartDist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+    pinchStartScale = refState.scaleFrac;
+  }
+});
+stageEl.addEventListener('pointermove', (e)=>{
+  if(!placingMode || !refState || !activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(activePointers.size===1 && dragStart){
+    const dx = e.clientX-dragStart.x, dy = e.clientY-dragStart.y;
+    refState.xFrac = clamp01(dragStart.xFrac + dx/window.innerWidth);
+    refState.yFrac = clamp01(dragStart.yFrac + dy/window.innerHeight);
+    renderRefOverlay();
+  } else if(activePointers.size===2 && pinchStartDist){
+    const pts = [...activePointers.values()];
+    const d = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+    refState.scaleFrac = Math.min(1.8, Math.max(0.08, pinchStartScale * (d/pinchStartDist)));
+    renderRefOverlay();
+  }
+});
+function releasePointer(e){
+  activePointers.delete(e.pointerId);
+  if(activePointers.size<2) pinchStartDist=null;
+  if(activePointers.size<1) dragStart=null;
+}
+stageEl.addEventListener('pointerup', releasePointer);
+stageEl.addEventListener('pointercancel', releasePointer);
+
+/* ============================================================
+   NORMAL TOUCH / MOUSE DRAWING (in addition to air-draw)
+   - one finger: always draws, like a normal drawing app
+   - two fingers together: grabs & moves the nearest line
+============================================================ */
+let touchPointers = new Map(); // pointerId -> {x,y} in client coords
+let touchDrawId = null;
+let touchGrabActive = false;
+
+function stageToCanvasXY(e){
+  const rect = stageEl.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * devicePixelRatio,
+    y: (e.clientY - rect.top) * devicePixelRatio
+  };
+}
+function midpointCanvasXY(map){
+  const rect = stageEl.getBoundingClientRect();
+  const arr = [...map.values()];
+  let sx=0, sy=0;
+  arr.forEach(p=>{ sx+=p.x; sy+=p.y; });
+  return {
+    x: ((sx/arr.length) - rect.left) * devicePixelRatio,
+    y: ((sy/arr.length) - rect.top) * devicePixelRatio
+  };
+}
+
+stageEl.addEventListener('pointerdown', (e)=>{
+  if(placingMode) return;
+  if(e.pointerType==='mouse' && e.button!==0) return;
+  try{ stageEl.setPointerCapture(e.pointerId); }catch(err){}
+  touchPointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+  if(touchPointers.size===1){
+    // single finger — just draw, always
+    const {x,y} = stageToCanvasXY(e);
+    const px = mySide ? clampToSide(x, mySide) : x;
+    touchDrawId = e.pointerId;
+    beginStroke(px, y);
+  } else if(touchPointers.size===2){
+    // second finger joined — switch to grab & move mode
+    if(touchDrawId!==null && drawing) endStroke();
+    touchDrawId = null;
+    const {x,y} = midpointCanvasXY(touchPointers);
+    const px = mySide ? clampToSide(x, mySide) : x;
+    const candidate = findStrokeNear({x:px,y});
+    if(candidate){ startGrab(candidate, {x:px,y}); touchGrabActive = true; }
+  }
+});
+stageEl.addEventListener('pointermove', (e)=>{
+  if(placingMode) return;
+  if(!touchPointers.has(e.pointerId)) return;
+  touchPointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+  if(touchGrabActive && touchPointers.size>=2){
+    const {x,y} = midpointCanvasXY(touchPointers);
+    const px = mySide ? clampToSide(x, mySide) : x;
+    updateGrab({x:px,y});
+  } else if(touchDrawId===e.pointerId && drawing){
+    const {x,y} = stageToCanvasXY(e);
+    const px = mySide ? clampToSide(x, mySide) : x;
+    extendStroke(px, y);
+  }
+});
+function endTouchDraw(e){
+  if(!touchPointers.has(e.pointerId)) return;
+  touchPointers.delete(e.pointerId);
+  if(touchGrabActive){
+    if(touchPointers.size<2){ endGrab(); touchGrabActive=false; }
+  } else if(touchDrawId===e.pointerId){
+    endStroke();
+    touchDrawId = null;
+  }
+}
+stageEl.addEventListener('pointerup', endTouchDraw);
+stageEl.addEventListener('pointercancel', endTouchDraw);
+
+/* ============================================================
+   SIDE / SPLIT-SCREEN HELPERS (for two-player collab)
+============================================================ */
+function sideBounds(side){
+  if(!side) return {minX:0, maxX:W()};
+  const half = W()/2;
+  return side==='left' ? {minX:0,maxX:half} : {minX:half,maxX:W()};
+}
+function clampToSide(x, side){
+  const b = sideBounds(side);
+  return Math.min(Math.max(x, b.minX), b.maxX);
+}
+
+function updateDivider(){
+  const div = document.getElementById('divider');
+  const tag = document.getElementById('sideTag');
+  if(mySide){
+    div.style.display='block';
+    tag.style.display='block';
+    tag.style.left = mySide==='left' ? '10px' : 'auto';
+    tag.style.right = mySide==='right' ? '10px' : 'auto';
+    tag.textContent = mySide==='left' ? 'جهتك: يسار' : 'جهتك: يمين';
+  } else {
+    div.style.display='none';
+    tag.style.display='none';
+  }
+}
+
+/* ============================================================
+   DRAWING PRIMITIVES + STROKE MODEL
+============================================================ */
+function strokeSegment(x1,y1,x2,y2,color,size){
+  inkCtx.strokeStyle = color;
+  inkCtx.lineWidth = size * devicePixelRatio;
+  inkCtx.shadowColor = color;
+  inkCtx.shadowBlur = size * 0.9;
+  inkCtx.beginPath();
+  inkCtx.moveTo(x1,y1);
+  inkCtx.lineTo(x2,y2);
+  inkCtx.stroke();
+  inkCtx.shadowBlur = 0;
+}
+
+function redrawAll(){
+  inkCtx.clearRect(0,0,W(),H());
+  for(const s of strokes){
+    for(let i=0;i<s.points.length-1;i++){
+      strokeSegment(s.points[i].x, s.points[i].y, s.points[i+1].x, s.points[i+1].y, s.color, s.size);
+    }
+  }
+}
+
+function distToSegment(p, a, b){
+  const dx=b.x-a.x, dy=b.y-a.y;
+  const len2 = dx*dx+dy*dy;
+  if(len2===0) return Math.hypot(p.x-a.x, p.y-a.y);
+  let t = ((p.x-a.x)*dx + (p.y-a.y)*dy)/len2;
+  t = Math.max(0, Math.min(1,t));
+  const px = a.x+t*dx, py=a.y+t*dy;
+  return Math.hypot(p.x-px, p.y-py);
+}
+
+function findStrokeNear(point){
+  let best=null, bestDist=Infinity;
+  for(const s of strokes){
+    if(mySide && s.side && s.side!==mySide) continue; // only grab strokes on your own side
+    for(let i=0;i<s.points.length-1;i++){
+      const d = distToSegment(point, s.points[i], s.points[i+1]);
+      if(d<bestDist){ bestDist=d; best=s; }
+    }
+  }
+  if(!best) return null;
+  const threshold = Math.max(22, best.size*1.8) * devicePixelRatio;
+  return bestDist<=threshold ? best : null;
+}
+
+function beginStroke(x,y){
+  drawing = true;
+  lastPoint = {x,y};
+  currentStrokePoints = [{x,y}];
+}
+function extendStroke(x,y){
+  if(!drawing) return;
+  strokeSegment(lastPoint.x, lastPoint.y, x, y, currentColor, currentSize);
+  lastPoint = {x,y};
+  currentStrokePoints.push({x,y});
+}
+function endStroke(){
+  if(!drawing) return;
+  drawing = false;
+  if(currentStrokePoints.length>1){
+    const s = {
+      id: 's'+(++strokeCount)+'_'+Date.now(),
+      points: currentStrokePoints.slice(),
+      color: currentColor,
+      size: currentSize,
+      side: mySide
+    };
+    strokes.push(s);
+    pushStrokeToRoom(s);
+  }
+  currentStrokePoints = [];
+  lastPoint = null;
+}
+
+function startGrab(stroke, point){
+  grabbing = true;
+  grabTarget = stroke;
+  grabAnchor = point;
+  grabOriginalPoints = stroke.points.map(p=>({x:p.x,y:p.y}));
+  toast('أمسكت الخط — حرّكه لمكانه الجديد');
+}
+function updateGrab(point){
+  if(!grabbing || !grabTarget) return;
+  const dx = point.x-grabAnchor.x, dy = point.y-grabAnchor.y;
+  grabTarget.points = grabOriginalPoints.map(p=>({x:p.x+dx, y:p.y+dy}));
+  redrawAll();
+}
+function endGrab(){
+  if(!grabbing) return;
+  grabbing = false;
+  if(grabTarget) pushMoveToRoom(grabTarget);
+  grabTarget = null;
+  grabAnchor = null;
+  grabOriginalPoints = null;
+}
+
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  strokes = strokes.filter(s=> mySide && s.side && s.side!==mySide); // keep partner's side if in split mode
+  redrawAll();
+  pushClearToRoom();
+});
+
+/* ============================================================
+   HAND TRACKING
+============================================================ */
+const videoEl = document.getElementById('cam');
+const handStateEl = document.getElementById('handState');
+
+function distPx(a,b){
+  const dx=(a.x-b.x)*W(), dy=(a.y-b.y)*H();
+  return Math.hypot(dx,dy);
+}
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+
+function fingerExtended(pts, mcp, pip, tip){
+  const dMcp = distPx(pts[0], pts[mcp]);
+  const dPip = distPx(pts[0], pts[pip]);
+  const dTip = distPx(pts[0], pts[tip]);
+  return dTip > dPip && dTip > dMcp*1.25;
+}
+
+function onResults(results){
+  liveCtx.clearRect(0,0,W(),H());
+
+  if(!results.multiHandLandmarks || results.multiHandLandmarks.length===0){
+    handStateEl.textContent = 'لا توجد يد';
+    if(drawing) endStroke();
+    if(grabbing) endGrab();
+    return;
+  }
+
+  const lm = results.multiHandLandmarks[0];
+  const pts = lm.map(p=>({x: facingMode==='user' ? 1-p.x : p.x, y: p.y}));
+
+  // skeleton
+  liveCtx.strokeStyle = 'rgba(57,255,138,0.55)';
+  liveCtx.lineWidth = 2*devicePixelRatio;
+  HAND_CONNECTIONS.forEach(([a,b])=>{
+    liveCtx.beginPath();
+    liveCtx.moveTo(pts[a].x*W(), pts[a].y*H());
+    liveCtx.lineTo(pts[b].x*W(), pts[b].y*H());
+    liveCtx.stroke();
+  });
+  pts.forEach((p,i)=>{
+    liveCtx.beginPath();
+    liveCtx.fillStyle = (i===4 || i===8) ? '#eaffef' : 'rgba(57,255,138,0.85)';
+    liveCtx.arc(p.x*W(), p.y*H(), (i===4||i===8?4.5:3)*devicePixelRatio, 0, Math.PI*2);
+    liveCtx.fill();
+  });
+
+  if(placingMode){
+    handStateEl.textContent = 'وضع تحديد الصورة';
+    if(drawing) endStroke();
+    if(grabbing) endGrab();
+    return;
+  }
+
+  const handSize = distPx(pts[0], pts[9]) || 60;
+  const pinchDist = distPx(pts[4], pts[8]);
+  const isPinching = pinchDist < handSize*0.42;
+
+  const indexExt = fingerExtended(pts,5,6,8);
+  const middleExt = fingerExtended(pts,9,10,12);
+  const ringExt = fingerExtended(pts,13,14,16);
+  const pinkyExt = fingerExtended(pts,17,18,20);
+
+  const openHand = indexExt && middleExt && ringExt && pinkyExt;
+  const pointingGesture = !isPinching && !openHand && indexExt && !middleExt && !ringExt && !pinkyExt;
+
+  let penDown = false, tipX=0, tipY=0, viaPinch=false;
+  if(isPinching){
+    penDown = true; viaPinch = true;
+    tipX = ((pts[4].x+pts[8].x)/2) * W();
+    tipY = ((pts[4].y+pts[8].y)/2) * H();
+  } else if(pointingGesture){
+    penDown = true; viaPinch = false;
+    tipX = pts[8].x * W();
+    tipY = pts[8].y * H();
+  }
+  if(openHand) penDown = false;
+
+  handStateEl.textContent = openHand ? 'يد مفتوحة — توقف'
+    : isPinching ? 'قرص — رسم/إمساك'
+    : pointingGesture ? 'إشارة — رسم عن بُعد'
+    : 'يد ظاهرة';
+
+  const px = mySide ? clampToSide(tipX, mySide) : tipX;
+
+  if(penDown){
+    if(!drawing && !grabbing){
+      if(viaPinch){
+        const candidate = findStrokeNear({x:px,y:tipY});
+        if(candidate){ startGrab(candidate, {x:px,y:tipY}); }
+        else { beginStroke(px, tipY); }
+      } else {
+        beginStroke(px, tipY);
+      }
+    } else if(grabbing){
+      updateGrab({x:px,y:tipY});
+    } else {
+      extendStroke(px, tipY);
+    }
+  } else {
+    if(grabbing) endGrab();
+    else if(drawing) endStroke();
+  }
+}
+
+async function startCamera(){
+  if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode: facingMode, width:{ideal:640}, height:{ideal:480} },
+    audio:false
+  });
+  currentStream = stream;
+  videoEl.srcObject = stream;
+  await videoEl.play();
+  document.getElementById('camWrap').classList.toggle('envFacing', facingMode==='environment');
+}
+
+let rafHandle = null;
+async function trackLoop(){
+  if(videoEl.readyState>=2 && handsInstance){
+    try{ await handsInstance.send({image:videoEl}); }catch(e){}
+  }
+  rafHandle = requestAnimationFrame(trackLoop);
+}
+
+function showCamError(msg){
+  const box = document.getElementById('camError');
+  document.getElementById('camErrorMsg').textContent = msg;
+  box.classList.add('show');
+}
+function hideCamError(){
+  document.getElementById('camError').classList.remove('show');
+}
+function diagnoseCameraError(err){
+  if(!window.isSecureContext){
+    return 'الصفحة غير مفتوحة عبر https أو من ملف محلي بأمان — افتح الملف مباشرة في المتصفح (وليس داخل معاينة مضمّنة) حتى يُسمح بالكاميرا.';
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    return 'هذا المتصفح لا يدعم الوصول للكاميرا، أو الصفحة داخل إطار (iframe) لا يُسمح له بذلك.';
+  }
+  const name = err && err.name;
+  if(name==='NotAllowedError' || name==='PermissionDeniedError'){
+    return 'تم رفض إذن الكاميرا. افتح إعدادات الموقع في المتصفح وفعّل إذن الكاميرا، ثم أعد المحاولة.';
+  }
+  if(name==='NotFoundError' || name==='DevicesNotFoundError'){
+    return 'لم يتم العثور على كاميرا على هذا الجهاز.';
+  }
+  if(name==='NotReadableError' || name==='TrackStartError'){
+    return 'الكاميرا مستخدمة حالياً من تطبيق آخر. أغلق التطبيقات الأخرى التي تستخدمها وأعد المحاولة.';
+  }
+  if(name==='OverconstrainedError'){
+    return 'إعدادات الكاميرا المطلوبة غير مدعومة على هذا الجهاز.';
+  }
+  return 'تعذّر الوصول إلى الكاميرا (' + (name||'خطأ غير معروف') + '). جرّب فتح الملف مباشرة في المتصفح بدل المعاينة المضمّنة.';
+}
+
+async function initHands(){
+  await startCamera();
+  hideCamError();
+  handsInstance = new Hands({locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}`});
+  handsInstance.setOptions({
+    maxNumHands:1,
+    modelComplexity:1,
+    minDetectionConfidence:0.6,
+    minTrackingConfidence:0.6
+  });
+  handsInstance.onResults(onResults);
+  trackLoop();
+  toast('قرّب السبابة من الإبهام للرسم القريب، أو أشّر بالسبابة فقط للرسم عن بُعد');
+}
+initHands().catch(err=>{
+  console.error(err);
+  showCamError(diagnoseCameraError(err));
+});
+
+document.getElementById('retryCamBtn').addEventListener('click', ()=>{
+  hideCamError();
+  toast('جارٍ إعادة المحاولة...');
+  initHands().catch(err=>{
+    console.error(err);
+    showCamError(diagnoseCameraError(err));
+  });
+});
+
+document.getElementById('flipBtn').addEventListener('click', async ()=>{
+  facingMode = facingMode==='user' ? 'environment' : 'user';
+  try{
+    await startCamera();
+    toast(facingMode==='user' ? 'الكاميرا الأمامية' : 'الكاميرا الخلفية');
+    if(conn && conn.open) sendCameraTo(conn.peer);
+  }
+  catch(e){ toast('تعذّر قلب الكاميرا'); }
+});
+
+document.getElementById('camWrap').addEventListener('click', function(){
+  this.classList.toggle('expanded');
+});
+
+/* ============================================================
+   COLOR PICKER
+============================================================ */
+const PALETTE = [
+  '#39ff8a','#ffffff','#000000','#7f7f7f','#ff0000','#ff3b6b','#ff6b00','#ff9d2e',
+  '#ffc72e','#ffe23b','#d4ff2e','#8aff2e','#3bff6b','#00ffb3','#00ffd0','#3bd6ff',
+  '#2e9dff','#4d6bff','#7a4dff','#b83bff','#e03bff','#ff3bd6','#ff3ba0','#ff8ac1'
+];
+const colorRing = document.getElementById('colorRing');
+(function buildRing(){
+  const R = 118;
+  const n = PALETTE.length;
+  PALETTE.forEach((hex,i)=>{
+    const angle = (i/n) * Math.PI*2 - Math.PI/2;
+    const x = 150 + R*Math.cos(angle) - 15;
+    const y = 150 + R*Math.sin(angle) - 15;
+    const dot = document.createElement('div');
+    dot.className = 'swatch';
+    dot.style.left = x+'px';
+    dot.style.top = y+'px';
+    dot.style.background = hex;
+    dot.addEventListener('click', ()=>{
+      currentColor = hex;
+      document.getElementById('colorDot').style.background = hex;
+      colorRing.classList.remove('show');
+    });
+    colorRing.appendChild(dot);
+  });
+})();
+document.getElementById('colorBtn').addEventListener('click', ()=>{
+  document.getElementById('sizePanel').classList.remove('show');
+  colorRing.classList.toggle('show');
+});
+document.getElementById('customColorInput').addEventListener('input', (e)=>{
+  currentColor = e.target.value;
+  document.getElementById('colorDot').style.background = currentColor;
+});
+
+/* ============================================================
+   SIZE PICKER
+============================================================ */
+const sizeSlider = document.getElementById('sizeSlider');
+const sizePreviewDot = document.getElementById('sizePreviewDot');
+function updateSizePreview(){
+  const d = Math.max(6, currentSize);
+  sizePreviewDot.style.width = d+'px';
+  sizePreviewDot.style.height = d+'px';
+}
+updateSizePreview();
+document.getElementById('sizeBtn').addEventListener('click', ()=>{
+  colorRing.classList.remove('show');
+  document.getElementById('sizePanel').classList.toggle('show');
+});
+sizeSlider.addEventListener('input', (e)=>{
+  currentSize = +e.target.value;
+  updateSizePreview();
+});
+
+/* ============================================================
+   UI TOGGLE
+============================================================ */
+document.getElementById('toggleBtn').addEventListener('click', ()=>{
+  document.getElementById('toolbar').classList.toggle('hidden');
+});
+
+/* ============================================================
+   COLLAB — real cross-device peer-to-peer (WebRTC via PeerJS's
+   free public broker just for the initial handshake; the actual
+   drawing data then flows device-to-device, not through any
+   server of ours).
+============================================================ */
+let peer = null;
+let conn = null;
+let isHost = false;
+let outCall = null;   // outgoing media call (sending our camera)
+let inCall = null;    // incoming media call (their camera)
+
+function showRemoteCam(stream){
+  const v = document.getElementById('remoteCam');
+  if(v.srcObject !== stream) v.srcObject = stream;
+  document.getElementById('remoteCamWrap').classList.add('show');
+}
+function hideRemoteCam(){
+  const wrap = document.getElementById('remoteCamWrap');
+  wrap.classList.remove('show');
+  document.getElementById('remoteCam').srcObject = null;
+}
+function sendCameraTo(remoteId){
+  if(!peer || !currentStream) return;
+  try{
+    if(outCall){ try{ outCall.close(); }catch(e){} }
+    outCall = peer.call(remoteId, currentStream);
+    outCall.on('stream', remoteStream=> showRemoteCam(remoteStream));
+  }catch(e){}
+}
+function wirePeerForCalls(){
+  peer.on('call', call=>{
+    call.answer(currentStream || undefined);
+    inCall = call;
+    call.on('stream', remoteStream=> showRemoteCam(remoteStream));
+    call.on('close', hideRemoteCam);
+  });
+}
+
+function genCode(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c='';
+  for(let i=0;i<6;i++) c+=chars[Math.floor(Math.random()*chars.length)];
+  return c;
+}
+
+function teardownPeer(){
+  if(outCall){ try{ outCall.close(); }catch(e){} outCall=null; }
+  if(inCall){ try{ inCall.close(); }catch(e){} inCall=null; }
+  if(conn){ try{ conn.close(); }catch(e){} conn=null; }
+  if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
+  hideRemoteCam();
+}
+
+function wireConnection(){
+  conn.on('data', data=>handleRemoteMsg(data));
+  conn.on('close', ()=>{
+    toast('انقطع الاتصال بصديقك');
+    document.getElementById('roomState').textContent = 'انقطع الاتصال — رسم فردي الآن';
+    hideRemoteCam();
+  });
+  conn.on('error', ()=>{ toast('خطأ في الاتصال'); });
+}
+
+function pushStrokeToRoom(s){ if(conn && conn.open) conn.send({type:'stroke', stroke:s}); }
+function pushMoveToRoom(s){ if(conn && conn.open) conn.send({type:'move', id:s.id, points:s.points}); }
+function pushClearToRoom(){ if(conn && conn.open) conn.send({type:'clear', side:mySide}); }
+function handleRemoteMsg(data){
+  if(data.type==='stroke'){
+    strokes.push(data.stroke);
+    for(let i=0;i<data.stroke.points.length-1;i++){
+      const a=data.stroke.points[i], b=data.stroke.points[i+1];
+      strokeSegment(a.x,a.y,b.x,b.y,data.stroke.color,data.stroke.size);
+    }
+  } else if(data.type==='move'){
+    const s = strokes.find(x=>x.id===data.id);
+    if(s){ s.points = data.points; redrawAll(); }
+  } else if(data.type==='clear'){
+    strokes = strokes.filter(s=> s.side===data.side ? false : true);
+    redrawAll();
+  }
+}
+
+function startHost(attemptsLeft){
+  roomCode = genCode();
+  peer = new Peer('airdraw-room-'+roomCode);
+  wirePeerForCalls();
+  peer.on('open', ()=>{
+    document.getElementById('roomState').textContent = `غرفة ${roomCode} — بانتظار صديقك...`;
+    document.getElementById('roomCodeDisplay').textContent = roomCode;
+  });
+  peer.on('connection', c=>{
+    conn = c;
+    wireConnection();
+    document.getElementById('roomState').textContent = `متصل عبر الإنترنت — غرفة ${roomCode} (جهتك: يسار) ✅`;
+    toast('انضم صديقك إلى الغرفة!');
+    sendCameraTo(conn.peer);
+  });
+  peer.on('error', err=>{
+    if(err.type==='unavailable-id' && attemptsLeft>0){
+      teardownPeer();
+      startHost(attemptsLeft-1);
+    } else {
+      toast('تعذّر إنشاء الغرفة، تأكد من اتصالك بالإنترنت');
+    }
+  });
+}
+
+function startJoin(code){
+  peer = new Peer();
+  wirePeerForCalls();
+  peer.on('open', ()=>{
+    conn = peer.connect('airdraw-room-'+code, {reliable:true});
+    conn.on('open', ()=>{
+      wireConnection();
+      document.getElementById('roomState').textContent = `متصل عبر الإنترنت — غرفة ${code} (جهتك: يمين) ✅`;
+      collabModal.classList.remove('show');
+      toast('انضممت إلى الغرفة!');
+      sendCameraTo(conn.peer);
+    });
+    conn.on('error', ()=>{ toast('لم يتم العثور على هذه الغرفة، تأكد من الرمز'); });
+  });
+  peer.on('error', ()=>{ toast('لم يتم العثور على هذه الغرفة، تأكد من الرمز والاتصال بالإنترنت'); });
+}
+
+const collabModal = document.getElementById('collabModal');
+document.getElementById('collabBtn').addEventListener('click', ()=>{
+  collabModal.classList.add('show');
+  document.getElementById('createStep').style.display='block';
+  document.getElementById('createdBox').style.display='none';
+});
+document.getElementById('closeModal').addEventListener('click', ()=> collabModal.classList.remove('show'));
+document.getElementById('createRoomBtn').addEventListener('click', ()=>{
+  teardownPeer();
+  mySide = 'left';
+  isHost = true;
+  updateDivider();
+  document.getElementById('createStep').style.display='none';
+  document.getElementById('createdBox').style.display='block';
+  document.getElementById('roomCodeDisplay').textContent = '......';
+  startHost(4);
+});
+document.getElementById('copyCodeBtn').addEventListener('click', ()=>{
+  if(!roomCode) return;
+  navigator.clipboard.writeText(roomCode).then(()=>toast('تم نسخ الرمز')).catch(()=>toast(roomCode));
+});
+document.getElementById('joinRoomBtn').addEventListener('click', ()=>{
+  const code = document.getElementById('joinInput').value.trim().toUpperCase();
+  if(code.length<4){ toast('أدخل رمزاً صحيحاً'); return; }
+  teardownPeer();
+  roomCode = code;
+  mySide = 'right';
+  isHost = false;
+  updateDivider();
+  toast('جارٍ الاتصال...');
+  startJoin(code);
+});
+document.getElementById('soloBtn').addEventListener('click', ()=>{
+  teardownPeer();
+  roomCode = null; mySide = null;
+  updateDivider();
+  document.getElementById('roomState').textContent = 'رسم فردي — لا يوجد اتصال';
+  collabModal.classList.remove('show');
+  toast('رسم فردي — الشاشة كلها لك');
+});
+
+/* ============================================================
+   INIT
+============================================================ */
+resize();
+updateDivider();
+
+})();
+</script>
+</body>
+</html>
