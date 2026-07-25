@@ -260,7 +260,7 @@
   <div class="card">
     <div id="closeModal">✕</div>
     <h2>ارسم مع صديق</h2>
-    <p>أنشئ غرفة وشارك الرمز، أو أدخل رمزاً وصلك من صديقك. تنقسم الشاشة بخط رفيع، كل شخص يرسم في جهته وترون رسمة بعضكم لحظياً. (يعمل حالياً بين نوافذ/تبويبات هذا الجهاز)</p>
+    <p>أنشئ غرفة وشارك الرمز مع صديقك على أي جهاز آخر (عبر الإنترنت)، أو أدخل رمزاً وصلك منه. تنقسم الشاشة بخط رفيع، كل شخص يرسم في جهته وترون رسمة بعضكم لحظياً. يحتاج كلا الجهازين اتصالاً بالإنترنت.</p>
     <div id="createStep">
       <button class="primaryBtn" id="createRoomBtn">إنشاء غرفة جديدة</button>
     </div>
@@ -277,6 +277,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1/dist/peerjs.min.js" crossorigin="anonymous"></script>
 
 <script>
 (function(){
@@ -303,7 +304,6 @@ let grabOriginalPoints = null;
 
 let mySide = null;         // 'left' | 'right' | null (solo)
 let roomCode = null;
-let channel = null;
 
 let facingMode = 'user';
 let currentStream = null;
@@ -486,6 +486,4 @@ stageEl.addEventListener('pointermove', (e)=>{
     renderRefOverlay();
   } else if(activePointers.size===2 && pinchStartDist){
     const pts = [...activePointers.values()];
-    const d = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
-    refState.scaleFrac = Math.min(1.8, Math.max(0.08, pinchStartScale * (d/pinchStartDist)));
-    rend
+    const d = Math.hypot(pts[0].x-pts[1].x, pts[0].
